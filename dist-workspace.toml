@@ -9,3 +9,5 @@ cargo-dist-version = "0.31.0"
 installers = ["msi"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
+# CI backends to support
+ci = "github"
