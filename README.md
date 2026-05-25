@@ -24,12 +24,12 @@ Wisteria is a Rust-based, ultra-fast quality control (QC) tool designed specific
 Wisteria is engineered for speed, significantly outperforming standard tools on long-read datasets. Below is a benchmark comparison of running Wisteria vs. FastQC on the same dataset of **50,000 genomic long reads**:
 
 | Tool & Input Format | Runtime (Seconds) | Speedup vs. FastQC |
-| : | : | : |
+| :--- | :--- | :--- |
 | **FastQC** (FASTQ) | **314.49s** (5.2m) | *Baseline* |
 | **Wisteria** (BAM) | **27.79s** | **11.3x faster** |
 | **Wisteria** (FASTQ) | **25.37s** | **12.4x faster** |
 
-*Note: Benchmarks were performed on 2 threads. Wisteria's parallel decompression and zero-allocation execution allow it to scale smoothly as thread count increases.*
+*Note: Benchmarks were performed on 1 thread. Wisteria's parallel decompression and zero-allocation execution allow it to scale smoothly as thread count increases.*
 
 
 
