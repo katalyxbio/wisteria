@@ -10,6 +10,10 @@ pub struct UnifiedQCReport {
     pub gc_content_distribution: Vec<u64>,
     pub length_vs_quality_2d: Vec<Vec<u64>>,
     
+    // Explicit 1D Distributions for plotting
+    pub sequence_length_distribution: Histogram1D<u32>,
+    pub per_sequence_quality_distribution: Histogram1D<f32>,
+    
     // Percentile binned data (0% to 100% of read length)
     pub quality_by_position_percentile: Vec<f32>,
     pub base_content_by_position_percentile: PercentileBaseContent,
@@ -17,6 +21,12 @@ pub struct UnifiedQCReport {
     // Absolute binned data (e.g. 1kb intervals)
     pub quality_by_position_absolute: Vec<f32>,
     pub base_content_by_position_absolute: AbsoluteBaseContent,
+}
+
+#[derive(Serialize)]
+pub struct Histogram1D<T> {
+    pub bin_edges: Vec<T>,
+    pub counts: Vec<u64>,
 }
 
 #[derive(Serialize)]
@@ -37,8 +47,69 @@ pub struct AbsoluteBaseContent {
     pub n: Vec<u64>,
 }
 
+fn bin_read_lengths(lengths: &[u32]) -> Histogram1D<u32> {
+    if lengths.is_empty() {
+        return Histogram1D { bin_edges: vec![0; 51], counts: vec![0; 50] };
+    }
+    
+    let min_l = *lengths.iter().min().unwrap() as f64;
+    let max_l = *lengths.iter().max().unwrap() as f64;
+    
+    let bin_count = 50;
+    let mut counts = vec![0u64; bin_count];
+    let mut bin_edges = Vec::with_capacity(bin_count + 1);
+    
+    let step = if max_l > min_l {
+        (max_l - min_l) / bin_count as f64
+    } else {
+        1.0
+    };
+    
+    for i in 0..=bin_count {
+        bin_edges.push((min_l + i as f64 * step).round() as u32);
+    }
+    
+    for &len in lengths {
+        let val = len as f64;
+        let mut bin = if step > 0.0 {
+            ((val - min_l) / step) as usize
+        } else {
+            0
+        };
+        if bin >= bin_count {
+            bin = bin_count - 1;
+        }
+        counts[bin] += 1;
+    }
+    
+    Histogram1D { bin_edges, counts }
+}
+
+fn bin_average_qualities(quals: &[f32]) -> Histogram1D<f32> {
+    let bin_count = 60;
+    let mut counts = vec![0u64; bin_count];
+    let mut bin_edges = Vec::with_capacity(bin_count + 1);
+    
+    for i in 0..=bin_count {
+        bin_edges.push(i as f32);
+    }
+    
+    for &q in quals {
+        let mut bin = q.floor() as usize;
+        if bin >= bin_count {
+            bin = bin_count - 1;
+        }
+        counts[bin] += 1;
+    }
+    
+    Histogram1D { bin_edges, counts }
+}
+
 pub fn generate_report(mut accumulator: QCAccumulator, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let summary = accumulator.calculate_summary();
+    
+    let sequence_length_distribution = bin_read_lengths(&accumulator.read_lengths);
+    let per_sequence_quality_distribution = bin_average_qualities(&accumulator.average_qualities);
     
     let quality_by_position_percentile: Vec<f32> = accumulator.quality_by_position_percentile.bins.iter()
         .map(|bin| {
@@ -108,6 +179,8 @@ pub fn generate_report(mut accumulator: QCAccumulator, output_path: &Path) -> Re
         summary,
         gc_content_distribution: accumulator.gc_content_distribution,
         length_vs_quality_2d: accumulator.length_vs_quality_2d,
+        sequence_length_distribution,
+        per_sequence_quality_distribution,
         quality_by_position_percentile,
         base_content_by_position_percentile,
         quality_by_position_absolute,
