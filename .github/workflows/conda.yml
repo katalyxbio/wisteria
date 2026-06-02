@@ -17,12 +17,8 @@ permissions:
 
 jobs:
   build-conda:
-    name: Build Conda Package (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    name: Build Conda Package (Linux)
+    runs-on: ubuntu-latest
     
     steps:
       - name: Checkout repository
@@ -67,12 +63,12 @@ jobs:
           fi
           
           # Find all .conda and .tar.bz2 files in output/
-          shopt -s globstar nullglob
-          FILES=(output/**/*.conda output/**/*.tar.bz2)
-          if [ ${#FILES[@]} -eq 0 ]; then
+          FILES=$(find output -type f \( -name "*.conda" -o -name "*.tar.bz2" \))
+          if [ -z "$FILES" ]; then
             echo "No conda packages found to upload."
             exit 1
           fi
           
-          echo "Found files to upload: ${FILES[*]}"
-          gh release upload "$TAG" "${FILES[@]}" --clobber
+          echo "Found files to upload:"
+          echo "$FILES"
+          gh release upload "$TAG" $FILES --clobber
