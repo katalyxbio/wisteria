@@ -1,0 +1,21 @@
+package:
+  name: wisteria
+  version: "0.1.0"
+
+source:
+  path: ..
+
+build:
+  number: 0
+  script:
+    - cargo install --locked --bins --root ${{ PREFIX }} --path .
+
+requirements:
+  build:
+    - ${{ compiler('c') }}
+    - ${{ compiler('rust') }}
+
+about:
+  homepage: https://github.com/katalyxbio/wisteria
+  license: CC-BY-NC-ND-4.0
+  summary: Ultra-fast genomic long-read quality check
