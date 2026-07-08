@@ -14,6 +14,9 @@ pub struct QCAccumulator {
     pub total_bases: u64,
     pub passed_filters_reads: u64,
     pub passed_filters_bases: u64,
+    /// BAM secondary/supplementary alignments skipped before counting (QC
+    /// operates on reads, not alignments). Always 0 for FASTQ.
+    pub skipped_alignments: u64,
 
     // Vectors to hold raw read lengths and qualities for precise median & N50 computations.
     pub read_lengths: Vec<u32>,
@@ -35,6 +38,7 @@ pub struct QCReportSummary {
     pub total_bases: u64,
     pub passed_filters_reads: u64,
     pub passed_filters_bases: u64,
+    pub skipped_alignments: u64,
     pub mean_read_length: f64,
     pub median_read_length: u32,
     pub n50_read_length: u32,
@@ -53,6 +57,7 @@ impl QCAccumulator {
             total_bases: 0,
             passed_filters_reads: 0,
             passed_filters_bases: 0,
+            skipped_alignments: 0,
             read_lengths: Vec::new(),
             average_qualities: Vec::new(),
             gc_content_distribution: vec![0; 101],
@@ -107,11 +112,18 @@ impl QCAccumulator {
         // GC & positional binned stats in a single unified loop
         let mut gc_count = 0;
         let mut valid_bases = 0;
-        
+
+        // Strength-reduced bin tracking: advance `pct_bin` (== floor(i*100/read_len))
+        // and `abs_bin` (== floor(i/1000)) incrementally to avoid a division per base.
+        let mut pct_bin = 0usize;
+        let mut pct_acc = 0usize;
+        let mut abs_bin = 0usize;
+        let mut abs_cnt = 0usize;
+
         for i in 0..read_len {
-            let pct_bin_idx = ((i * 100) / read_len).min(99);
-            let abs_bin_idx = (i / 1000).min(100);
-            
+            let pct_bin_idx = pct_bin.min(99);
+            let abs_bin_idx = abs_bin;
+
             let base = seq[i];
             let is_gc = match base {
                 b'A' | b'a' => {
@@ -157,6 +169,20 @@ impl QCAccumulator {
                 self.quality_by_position_absolute.bins[abs_bin_idx].quality_sum += q_val;
                 self.quality_by_position_absolute.bins[abs_bin_idx].quality_count += 1;
             }
+
+            // Advance bin trackers for the next base (Bresenham-style, no division).
+            pct_acc += 100;
+            while pct_acc >= read_len {
+                pct_acc -= read_len;
+                pct_bin += 1;
+            }
+            abs_cnt += 1;
+            if abs_cnt == 1000 {
+                abs_cnt = 0;
+                if abs_bin < 100 {
+                    abs_bin += 1;
+                }
+            }
         }
 
         let gc_pct = if valid_bases > 0 {
@@ -172,11 +198,21 @@ impl QCAccumulator {
         self.length_vs_quality_2d[l_bin][q_bin] += 1;
     }
 
-    pub fn add_read_bam(&mut self, record: &bam::Record, min_len: Option<usize>, min_qual: Option<f32>) {
+    pub fn add_read_bam(&mut self, record: &bam::RecordRef, min_len: Option<usize>, min_qual: Option<f32>) {
+        // QC describes reads, not alignments: a read's sequence lives on its
+        // primary record. Secondary alignments carry no SEQ (length 0) and
+        // supplementary alignments only a hard-clipped fragment, so both would
+        // distort the statistics. Skip them before counting.
+        let flags = record.flags();
+        if flags.is_secondary() || flags.is_supplementary() {
+            self.skipped_alignments += 1;
+            return;
+        }
+
         let seq = record.sequence();
         let qual = record.quality_scores();
         let read_len = seq.len();
-        
+
         self.total_reads += 1;
         self.total_bases += read_len as u64;
 
@@ -215,14 +251,22 @@ impl QCAccumulator {
         // GC & positional binned stats in a single unified loop
         let mut gc_count = 0;
         let mut valid_bases = 0;
-        
+
+        // Strength-reduced bin tracking: advance `pct_bin` (== floor(i*100/read_len))
+        // and `abs_bin` (== floor(i/1000)) incrementally to avoid a division per base.
+        // Mirrors the logic in `add_read`; keep the two in sync.
+        let mut pct_bin = 0usize;
+        let mut pct_acc = 0usize;
+        let mut abs_bin = 0usize;
+        let mut abs_cnt = 0usize;
+
         let mut seq_iter = seq.iter();
         let mut qual_iter = qual.iter();
-        
-        for i in 0..read_len {
-            let pct_bin_idx = ((i * 100) / read_len).min(99);
-            let abs_bin_idx = (i / 1000).min(100);
-            
+
+        for _ in 0..read_len {
+            let pct_bin_idx = pct_bin.min(99);
+            let abs_bin_idx = abs_bin;
+
             if let Some(base) = seq_iter.next() {
                 let is_gc = match base {
                     b'A' | b'a' => {
@@ -264,6 +308,20 @@ impl QCAccumulator {
                 self.quality_by_position_absolute.bins[abs_bin_idx].quality_sum += q_val;
                 self.quality_by_position_absolute.bins[abs_bin_idx].quality_count += 1;
             }
+
+            // Advance bin trackers for the next base (Bresenham-style, no division).
+            pct_acc += 100;
+            while pct_acc >= read_len {
+                pct_acc -= read_len;
+                pct_bin += 1;
+            }
+            abs_cnt += 1;
+            if abs_cnt == 1000 {
+                abs_cnt = 0;
+                if abs_bin < 100 {
+                    abs_bin += 1;
+                }
+            }
         }
 
         let gc_pct = if valid_bases > 0 {
@@ -300,6 +358,7 @@ impl QCAccumulator {
         self.total_bases += other.total_bases;
         self.passed_filters_reads += other.passed_filters_reads;
         self.passed_filters_bases += other.passed_filters_bases;
+        self.skipped_alignments += other.skipped_alignments;
 
         self.read_lengths.extend(other.read_lengths);
         self.average_qualities.extend(other.average_qualities);
@@ -325,6 +384,7 @@ impl QCAccumulator {
         let total_bases = self.total_bases;
         let passed_filters_reads = self.passed_filters_reads;
         let passed_filters_bases = self.passed_filters_bases;
+        let skipped_alignments = self.skipped_alignments;
 
         if self.read_lengths.is_empty() {
             return QCReportSummary {
@@ -332,6 +392,7 @@ impl QCAccumulator {
                 total_bases,
                 passed_filters_reads,
                 passed_filters_bases,
+                skipped_alignments,
                 mean_read_length: 0.0,
                 median_read_length: 0,
                 n50_read_length: 0,
@@ -396,6 +457,7 @@ impl QCAccumulator {
             total_bases,
             passed_filters_reads,
             passed_filters_bases,
+            skipped_alignments,
             mean_read_length,
             median_read_length,
             n50_read_length,
@@ -433,6 +495,63 @@ mod tests {
         assert_eq!(summary.n50_read_length, 100);
         assert_eq!(summary.median_read_length, 30);
         assert_eq!(summary.mean_read_length, 40.0);
+    }
+
+    #[test]
+    fn test_bin_strength_reduction_matches_division() {
+        // The incremental bin trackers in `add_read`/`add_read_bam` must produce
+        // exactly the same bins as the original `floor(i*100/read_len)` /
+        // `floor(i/1000)` divisions. Cover short (<100 bp, multi-bin-per-base),
+        // exact-boundary, and >100kb (absolute-bin clamp) reads.
+        for &len in &[1usize, 7, 99, 100, 250, 1000, 3333, 100_001] {
+            let seq: Vec<u8> = (0..len)
+                .map(|i| match i % 5 {
+                    0 => b'A',
+                    1 => b'C',
+                    2 => b'G',
+                    3 => b'T',
+                    _ => b'N',
+                })
+                .collect();
+            let qual = vec![30u8; len];
+
+            let mut acc = QCAccumulator::new();
+            acc.add_read(&seq, &qual, false, None, None);
+
+            // Reference base-content bins computed with the direct division formula.
+            let mut pct = vec![[0u64; 5]; 100];
+            let mut abs = vec![[0u64; 5]; 101];
+            for i in 0..len {
+                let p = ((i * 100) / len).min(99);
+                let a = (i / 1000).min(100);
+                let idx = match seq[i] {
+                    b'A' => 0,
+                    b'C' => 1,
+                    b'G' => 2,
+                    b'T' => 3,
+                    _ => 4,
+                };
+                pct[p][idx] += 1;
+                abs[a][idx] += 1;
+            }
+
+            for b in 0..100 {
+                let bin = &acc.base_content_by_position_percentile.bins[b];
+                assert_eq!(
+                    [bin.a_count, bin.c_count, bin.g_count, bin.t_count, bin.n_count],
+                    pct[b],
+                    "percentile bin {b} mismatch for read length {len}"
+                );
+            }
+            for b in 0..101 {
+                let bin = &acc.base_content_by_position_absolute.bins[b];
+                assert_eq!(
+                    [bin.a_count, bin.c_count, bin.g_count, bin.t_count, bin.n_count],
+                    abs[b],
+                    "absolute bin {b} mismatch for read length {len}"
+                );
+            }
+        }
     }
 
     #[test]

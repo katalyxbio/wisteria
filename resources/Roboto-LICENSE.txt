@@ -1,0 +1,9 @@
+Roboto-Regular.ttf in this directory is part of the Roboto font family by
+Google, distributed under the Apache License, Version 2.0.
+
+It is bundled (via include_bytes! in src/report/plots.rs) purely to provide a
+text-rendering font for the pure-Rust `plotters`/`ab_glyph` PNG backend used by
+the `--plots` feature, which ships no default font.
+
+Full license text: https://www.apache.org/licenses/LICENSE-2.0
+Font source: https://fonts.google.com/specimen/Roboto

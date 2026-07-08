@@ -8,12 +8,14 @@ Wisteria is a Rust-based, ultra-fast quality control (QC) tool designed specific
 
 - **Blazingly Fast & Scalable:** Leverages a data-parallel MapReduce architecture powered by **Rayon** for thread-safe accumulator reductions.
 - **Advanced BAM Concurrency:** Utilizes the pure-Rust **`noodles`** library with `bgzf::io::MultithreadedReader` to handle multi-threaded block decompression.
-- **Robust FASTQ Parsing:** Transparently detects and decompresses Gzip files (.gz) using zero-copy stream processing via **`needletail`**.
+- **Robust FASTQ Parsing:** Transparently detects and decompresses Gzip files (.gz) using zero-copy stream processing via **`needletail`**. **BGZF-compressed** FASTQ (from `bgzip`) is auto-detected and decompressed **in parallel** across cores via the same block decoder as BAM; plain single-stream gzip decodes serially (accelerated by the zlib-ng backend). See [Fast FASTQ decompression](#fast-fastq-decompression).
 - **Long-Read Tailored Statistics:**
   - Standard metrics adapted to long reads: N50 read length, exact median length/quality, mean, min, and max values.
   - **Percentile Binning:** Dividers that split each read into 100 sections to track quality decay and base composition along the relative length.
   - **Absolute Binning:** Tracks quality and base composition in 1kb intervals up to 100kb+ for direct sequence decay observation.
   - **2D Density Matrix:** Generates a log-spaced length vs. quality density matrix to capture exact sequence profile clusters (ideal for 2D heatmaps).
+- **Primary-Read QC:** For BAM input, secondary (`0x100`) and supplementary (`0x800`) alignments are skipped so statistics describe reads, not alignments; unmapped primary reads are retained. The count of skipped records is reported.
+- **Pre-Rendered Plots:** With `--plots <dir>`, emits PNG charts of the report (read-length & quality histograms, GC distribution, per-position quality & base content, and a length-vs-quality density heatmap) rendered by the **Rust-native `plotters`** library — pure Rust, no system/C dependencies.
 - **Optional Read Filtering:** Adds optional, on-the-fly pre-filtering with `--min-len` and `--min-qual` to clean up datasets before calculating statistics.
 - **Dynamic Progress Counter:** Displays a real-time processed reads progress counter in the console during execution.
 
@@ -64,9 +66,13 @@ Usage: wisteria [OPTIONS] --input <INPUT>
 Options:
   -i, --input <INPUT>        Path to input FASTQ or BAM file. FASTQ files can be gzipped (.gz)
   -o, --output <OUTPUT>      Path to output unified JSON report [default: wisteria_report.json]
-  -t, --threads <THREADS>    Number of worker threads for parallel processing (BAM decompression and statistics compilation)
+  -t, --threads <THREADS>    Number of worker threads for the statistics fold (Rayon pool) [default: all cores]
+      --decompress-threads <N>  BGZF block-decompression workers for BAM input [default: --threads]
+      --plots <DIR>          Also render PNG charts of the report into this directory (Rust-native plotters)
       --min-len <MIN_LEN>    Optional minimum read length filter
       --min-qual <MIN_QUAL>  Optional minimum average read quality score filter
+      --debug-stats          Print a comprehensive profiling report (timings, throughput, decompression ratio, parallelism, memory)
+      --bench-decompress     Diagnostic (BAM only): measure raw BGZF decompression throughput without record parsing, then exit
   -h, --help                 Print help
   -V, --version              Print version
 ```
@@ -88,6 +94,33 @@ Options:
    # Skips reads shorter than 1,000 bp or with an average Phred quality score below Q9
    wisteria --input nanopore.fastq.gz --min-len 1000 --min-qual 9.0
    ```
+
+4. **Render PNG charts alongside the JSON report:**
+   ```bash
+   wisteria --input reads.bam --output report.json --plots ./qc_plots
+   ```
+   Writes seven PNGs into `./qc_plots/`: `read_length_distribution.png`,
+   `per_sequence_quality_distribution.png`, `gc_content_distribution.png`,
+   `quality_by_position_percentile.png`, `quality_by_position_absolute.png`,
+   `base_content_by_position.png`, and `length_vs_quality_heatmap.png`. Rendering
+   is done by the pure-Rust [`plotters`](https://crates.io/crates/plotters)
+   library (bitmap backend + `ab_glyph` fonts) — no system graphics libraries
+   required. A Roboto font (Apache-2.0) is bundled for text; see
+   `resources/Roboto-LICENSE.txt`.
+
+### Fast FASTQ decompression
+
+A plain `gzip`-compressed FASTQ is a **single continuous DEFLATE stream** — it can only be decompressed on one core, and on large files that serial decode, not the statistics, is the bottleneck (on a 50 GB input it accounts for ~500s of a ~525s run while the parallel fold sits idle waiting for data).
+
+The fix is **BGZF** (block-gzip): the same `.gz`-compatible format BAM uses, written by `bgzip` (ships with samtools/htslib). It's a concatenation of independent blocks that Wisteria decompresses **in parallel** across cores — turning that ~500s serial decode into a fold-bound run comparable to the BAM path. Any tool can still read the file as ordinary gzip.
+
+Convert once:
+```bash
+# Re-compress a plain gzip FASTQ as BGZF (parallel-decompressible)
+zcat reads.fastq.gz | bgzip -@ 8 > reads.bgz.fastq.gz
+wisteria --input reads.bgz.fastq.gz --threads 32
+```
+Wisteria auto-detects BGZF from the file header — no flag needed. `--debug-stats` reports `Decompress mode: parallel BGZF block decode` vs `serial gzip / uncompressed` so you can confirm which path ran. Plain gzip still works unchanged and is sped up ~2–3× by the bundled zlib-ng decoder.
 
 
 
@@ -118,7 +151,7 @@ In standard formats, BAM sequences are stored in a 4-bit compressed form.
 ## Output JSON Schema
 
 The unified JSON report contains structured, downstream-ready keys:
-- `summary`: High-level metrics (total/passed reads, bases, means, medians, N50, mins, maxs).
+- `summary`: High-level metrics (total/passed reads, bases, means, medians, N50, mins, maxs, and `skipped_alignments` — BAM secondary/supplementary records excluded from QC).
 - `gc_content_distribution`: 101-element array showing read counts for each GC percentage (0% to 100%).
 - `length_vs_quality_2d`: A 50x50 log-spaced length vs linear quality grid of read counts.
 - `sequence_length_distribution`: An explicit 1D histogram struct containing `bin_edges` (50 bins) and the corresponding read `counts` for each length interval.
