@@ -105,7 +105,11 @@ fn bin_average_qualities(quals: &[f32]) -> Histogram1D<f32> {
     Histogram1D { bin_edges, counts }
 }
 
-pub fn generate_report(mut accumulator: QCAccumulator, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub fn generate_report(
+    mut accumulator: QCAccumulator,
+    output_path: &Path,
+    plots_dir: Option<&Path>,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let summary = accumulator.calculate_summary();
     
     let sequence_length_distribution = bin_read_lengths(&accumulator.read_lengths);
@@ -190,6 +194,11 @@ pub fn generate_report(mut accumulator: QCAccumulator, output_path: &Path) -> Re
     let serialized = serde_json::to_string_pretty(&report)?;
     let mut file = File::create(output_path)?;
     file.write_all(serialized.as_bytes())?;
-    
-    Ok(())
+
+    let plots = match plots_dir {
+        Some(dir) => super::plots::generate_plots(&report, dir)?,
+        None => Vec::new(),
+    };
+
+    Ok(plots)
 }
