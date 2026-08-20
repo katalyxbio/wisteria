@@ -17,7 +17,7 @@ fn is_bam_path(path: &std::path::Path) -> bool {
 #[derive(Parser, Debug)]
 #[command(name = "Wisteria")]
 #[command(author = "DeepMind Pair Programmer")]
-#[command(version = "0.1.0")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "Ultra-fast genomic long-read quality check", long_about = None)]
 struct Args {
     /// Path to input FASTQ or BAM file. FASTQ files can be gzipped (.gz).
