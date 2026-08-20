@@ -19,5 +19,5 @@ requirements:
 
 about:
   homepage: https://github.com/katalyxbio/wisteria
-  license: CC-BY-NC-ND-4.0
+  license: PolyForm-Noncommercial-1.0.0
   summary: Ultra-fast genomic long-read quality check
