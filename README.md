@@ -1,6 +1,6 @@
 # Wisteria
 
-![Wisteria Logo](resources/wisteria_logo.png)
+![Wisteria Logo](resources/wisteria_logo.jpg)
 
 Wisteria is a Rust-based, ultra-fast quality control (QC) tool designed specifically for genomic long-read datasets (such as Oxford Nanopore and PacBio). It takes both BAM and FASTQ (raw or gzipped) as input, handles multi-threading elegantly, and outputs a single unified JSON report containing comprehensive statistics and binned distributions.
 
