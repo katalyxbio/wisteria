@@ -436,8 +436,10 @@ impl QCAccumulator {
         };
 
         // Mean Quality
-        let sum_q: f32 = self.average_qualities.iter().sum();
-        let mean_read_quality = sum_q / self.average_qualities.len() as f32;
+        // Accumulate in f64: a running f32 sum over millions of reads stalls once it exceeds ~2^27
+        // (adding ~37 to a value with a 16-unit step rounds badly), biasing the mean low.
+        let sum_q: f64 = self.average_qualities.iter().map(|&x| x as f64).sum();
+        let mean_read_quality = (sum_q / self.average_qualities.len() as f64) as f32;
 
         // Min/Max Quality
         let min_read_quality = self.average_qualities.iter().copied().fold(f32::INFINITY, f32::min);
